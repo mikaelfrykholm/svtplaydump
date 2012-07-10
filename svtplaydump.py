@@ -21,6 +21,8 @@
 
 from BeautifulSoup import BeautifulSoup
 from subprocess import *
+import re
+import json
 try:
     import urlparse
 except ImportError:
@@ -35,11 +37,13 @@ import sys
 def main(argv=None):
     if argv is None:
         argv=sys.argv
-    soup = BeautifulSoup(urllib2.urlopen(argv[1]).read())
-    flashvars = urlparse.parse_qs(soup.find("param", {"name":"flashvars",'value':True})['value'])
-    title = None
+    videoid = re.findall("/video/(.*)[/]*",argv[1])[0]
+    
+    soup = BeautifulSoup(urllib2.urlopen("http://www.svtplay.se/video/%s/?type=embed"%videoid).read())
+    
+    flashvars = json.loads(soup.find("param", {"name":"flashvars",'value':True})['value'][5:])
     try:
-        title = soup.find("div","info").ul.li.h2.string
+        title = flashvars['statistics']['title']
     except:
         title = "unnamed"
     if 'dynamicStreams' in flashvars:
@@ -50,6 +54,11 @@ def main(argv=None):
         rtmp = flashvars['pathflv'][0]
         filename = title+".flv"
         print Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0]
+    if 'video' in flashvars:
+        url = sorted(flashvars['video']['videoReferences'], key=lambda k: k['bitrate'])[-1]['url']
+        filename = title+".mp4"
+        print Popen(["rtmpdump",u"-o"+filename,"-r", url], stdout=PIPE).communicate()[0]
+
     else:
         print "Could not find any streams"
         return

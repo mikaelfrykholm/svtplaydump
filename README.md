@@ -1,4 +1,6 @@
 svtplaydump
 ===========
 
-svtplaydump downloads svtplay content
+svtplaydump downloads svtplay content for offline viewing.
+Use like this:
+svtplaydump.py http://www.svtplay.se/video/128812/jakten-pa-bernhard
