@@ -144,5 +144,5 @@ if __name__ == "__main__":
             print Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0]
         #print(e.description)
     else:
-        filename = main(e.link)
+        filename = main(args.url)
         print("Saved to {}".format(filename))
