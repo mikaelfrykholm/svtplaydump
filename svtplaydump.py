@@ -27,6 +27,8 @@ import re
 import json
 from Crypto.Cipher import AES
 import struct
+import argparse
+import feedparser 
 try:
     import urlparse
 except ImportError:
@@ -38,10 +40,8 @@ except ImportError:
     pass
 import sys
 
-def main(argv=None):
-    if argv is None:
-        argv=sys.argv
-    page = urllib2.urlopen(argv[1]).read()
+def main(url):
+    page = urllib2.urlopen(url).read()
     soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
     videoid = re.findall("svt_article_id=(.*)[&]*",page)[0]
     flashvars = json.loads(urllib2.urlopen("http://www.svt.se/wd?widgetId=248134&sectionId=1024&articleId=%s&position=0&format=json&type=embed&contextSectionId=1024"%videoid).read())
@@ -65,7 +65,7 @@ def main(argv=None):
     else:
         print "Could not find any streams"
         return
-
+    return title+'.ts'
 def download_from_playlist(url, title):
     playlist = parse_playlist(urllib2.urlopen(url).read())
     videourl = sorted(playlist, key=lambda k: int(k['BANDWIDTH']))[-1]['url']
@@ -77,9 +77,11 @@ def download_from_playlist(url, title):
         decrypt=False
     with open("%s"%title,"w") as ofile:
         segment=0
+        size = 0
         for url in segments:
-            print "Downloading: %s"%(url)
             ufile = urllib2.urlopen(url)
+            print "\r{} MB".format(size/1024/1024),
+            sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
                 decryptor = AES.new(key, AES.MODE_CBC, iv)
@@ -89,6 +91,7 @@ def download_from_playlist(url, title):
                     if decrypt:
                         buf = decryptor.decrypt(buf)
                     ofile.write(buf)
+                    size += len(buf)
                 else:
                     ufile.close()
                     break
@@ -128,4 +131,18 @@ def parse_segment_playlist(playlist):
     return(segments, metadata)   
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-r", "--rss", help="Download all files in rss",
+                    action="store_true")
+    parser.add_argument("url")
+    args = parser.parse_args()
+    if args.rss:
+        d = feedparser.parse(args.url)
+        for e in d.entries:
+            print("Downloading: %s"%e.title)
+            filename = main(e.link)
+            print Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0]
+        #print(e.description)
+    else:
+        filename = main(e.link)
+        print("Saved to {}".format(filename))
