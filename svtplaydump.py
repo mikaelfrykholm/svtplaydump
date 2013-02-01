@@ -41,16 +41,12 @@ import sys
 def main(argv=None):
     if argv is None:
         argv=sys.argv
+    page = urllib2.urlopen(argv[1]).read()
+    soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
+    videoid = re.findall("svt_article_id=(.*)[&]*",page)[0]
+    flashvars = json.loads(urllib2.urlopen("http://www.svt.se/wd?widgetId=248134&sectionId=1024&articleId=%s&position=0&format=json&type=embed&contextSectionId=1024"%videoid).read())
     try:
-        videoid = re.findall("/video/(.*)[/]*",argv[1])[0]
-        soup = BeautifulSoup(urllib2.urlopen("http://www.svtplay.se/video/%s/?type=embed"%videoid).read())
-        flashvars = json.loads(soup.find("param", {"name":"flashvars",'value':True})['value'][5:])
-    except(IndexError):
-        page = urllib2.urlopen(argv[1]).read()
-        videoid = re.findall("svt_article_id=(.*)[&]*",page)[0]
-        flashvars = json.loads(urllib2.urlopen("http://www.svt.se/wd?widgetId=248134&sectionId=1024&articleId=%s&position=0&format=json&type=embed&contextSectionId=1024"%videoid).read())
-    try:
-        title = flashvars['statistics']['title']
+        title = soup.find('meta',{'property':'og:title'}).attrMap['content']
     except:
         title = "unnamed"
     if 'dynamicStreams' in flashvars:
