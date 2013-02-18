@@ -17,6 +17,7 @@
 #   along with this program.  If not, see <http://www.gnu.org/licenses/>
 #
 # Changelog:
+# 0.4 added mirror mode.
 # 0.3 added apple streaming playlist parsing and decryption
 # 0.2 added python 2.4 urlparse compatibility
 # 0.1 initial release
@@ -38,36 +39,45 @@ try:
     import urllib2.urlparse as urlparse
 except ImportError:
     pass
-import sys
+import sys, os
 
-def main(url):
+def main(url, title):
+    """
+    Try to scrape the site for video and download. 
+    """
+    if not url.startswith('http'):
+        url = "http://www.svtplay.se" + url
+    video = {}
     page = urllib2.urlopen(url).read()
     soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
-    videoid = re.findall("svt_article_id=(.*)[&]*",page)[0]
-    flashvars = json.loads(urllib2.urlopen("http://www.svt.se/wd?widgetId=248134&sectionId=1024&articleId=%s&position=0&format=json&type=embed&contextSectionId=1024"%videoid).read())
-    try:
-        title = soup.find('meta',{'property':'og:title'}).attrMap['content']
-    except:
-        title = "unnamed"
+    video_player = soup.body('a',{'data-json-href':True})[0]
+    flashvars = json.loads(urllib2.urlopen("http://www.svtplay.se/%s"%video_player.attrMap['data-json-href']+"?output=json").read())
+    video['title'] = title
+    if not title:
+        video['title'] = soup.find('meta',{'property':'og:title'}).attrMap['content'].replace('|','_').replace('/','_')
     if 'dynamicStreams' in flashvars:
-        url = flashvars['dynamicStreams'][0].split('url:')[1].split('.mp4,')[0] +'.mp4'
-        filename = title+".mp4"
+        video['url'] = flashvars['dynamicStreams'][0].split('url:')[1].split('.mp4,')[0] +'.mp4'
+        filename = video['title']+".mp4"
         print Popen(["rtmpdump",u"-o"+filename,"-r", url], stdout=PIPE).communicate()[0]
     if 'pathflv' in flashvars:
         rtmp = flashvars['pathflv'][0]
-        filename = title+".flv"
+        filename = video['title']+".flv"
         print Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0]
     if 'video' in flashvars:
         for reference in flashvars['video']['videoReferences']:
             if reference['url'].endswith("m3u8"):
-                url=reference['url']
-        download_from_playlist(url, title+'.ts')
+                video['url']=reference['url']
+                video['filename'] = video['title']+'.ts'
+                if 'statistics' in flashvars:
+                    video['category'] = flashvars['statistics']['category']
+        download_from_playlist(video)
     else:
         print "Could not find any streams"
         return
-    return title+'.ts'
-def download_from_playlist(url, title):
-    playlist = parse_playlist(urllib2.urlopen(url).read())
+    return video
+
+def download_from_playlist(video):
+    playlist = parse_playlist(urllib2.urlopen(video['url']).read())
     videourl = sorted(playlist, key=lambda k: int(k['BANDWIDTH']))[-1]['url']
     segments, metadata = parse_segment_playlist(urllib2.urlopen(videourl).read())
     if "EXT-X-KEY" in metadata:
@@ -75,7 +85,7 @@ def download_from_playlist(url, title):
         decrypt=True
     else:
         decrypt=False
-    with open("%s"%title,"w") as ofile:
+    with open("%s"%video['filename'],"w") as ofile:
         segment=0
         size = 0
         for url in segments:
@@ -98,7 +108,9 @@ def download_from_playlist(url, title):
             segment += 1
 
 def parse_playlist(playlist):
-    assert playlist.startswith("#EXTM3U")
+    if not playlist.startswith("#EXTM3U"):
+        print playlist
+        return False
     playlist = playlist.splitlines()[1:]
     items=[]
     for (metadata_string,url) in zip(playlist[0::2], playlist[1::2]):
@@ -126,23 +138,52 @@ def parse_segment_playlist(playlist):
             next_is_url=True
         if "EXT-X-KEY" in row:
              row = row.split(':',1)[1] #skip first part
-             parts = PATTERN.split(row)[1:-1] #do magic re split and keep quoting
+             parts = PATTERN.split(row)[1:-1] #do magic re split and keep quotes
              metadata["EXT-X-KEY"] = dict([part.split('=',1) for part in parts if '=' in part]) #throw away the commas and make dict of the pairs
     return(segments, metadata)   
+def parse_videolist():
+    page = urllib2.urlopen("http://www.svtplay.se/ajax/videos?antal=100").read()
+    soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
+    videos = []
+    for article in soup.findAll('article'):
+        meta = dict(article.attrs)
+        video = {}
+        video['title'] = meta['data-title']
+        video['description'] = meta['data-description']
+        video['url'] = dict(article.find('a').attrs)['href']
+        videos.append(video)
+    return videos
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-r", "--rss", help="Download all files in rss",
-                    action="store_true")
-    parser.add_argument("url")
+    parser.add_argument("-r", "--rss", help="Download all files in rss")
+    parser.add_argument("-u", "--url", help="Download video in url")
+    parser.add_argument("-m", "--mirror", help="Mirror all files", action="store_true")
+
     args = parser.parse_args()
-    if args.rss:
+
+    if args.rss: 
         d = feedparser.parse(args.url)
         for e in d.entries:
             print("Downloading: %s"%e.title)
-            filename = main(e.link)
+            filename = main(e.link, e.title)
             print Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0]
         #print(e.description)
+    if args.mirror:
+        for video in parse_videolist():
+            video['title'] = video['title'].replace('/','_')
+            print video['title']+'.mkv',
+            if os.path.exists(video['title']+'.mkv'):
+                print "Skipping" 
+                continue
+            print("Downloading...")
+            ret = main(video['url'], video['title'])
+
+            print Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0]
+            try:
+                os.unlink(video['title']+'.ts')
+            except:
+                import pdb;pdb.set_trace()
     else:
-        filename = main(args.url)
-        print("Saved to {}".format(filename))
+        video = main(args.url, None)
+        print("Downloaded {}".format(video['title']))   
