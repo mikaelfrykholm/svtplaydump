@@ -156,12 +156,11 @@ def parse_videolist():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("-r", "--rss", help="Download all files in rss")
-    parser.add_argument("-u", "--url", help="Download video in url")
-    parser.add_argument("-m", "--mirror", help="Mirror all files", action="store_true")
-
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("-r", "--rss", help="Download all files in rss")
+    group.add_argument("-u", "--url", help="Download video in url")
+    group.add_argument("-m", "--mirror", help="Mirror all files", action="store_true")
     args = parser.parse_args()
-
     if args.rss: 
         d = feedparser.parse(args.url)
         for e in d.entries:
