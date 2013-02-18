@@ -51,7 +51,11 @@ def main(url, title):
     page = urllib2.urlopen(url).read()
     soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
     video_player = soup.body('a',{'data-json-href':True})[0]
-    flashvars = json.loads(urllib2.urlopen("http://www.svtplay.se/%s"%video_player.attrMap['data-json-href']+"?output=json").read())
+    if video_player.attrMap['data-json-href'].startswith("/wd"):
+        flashvars = json.loads(urllib2.urlopen("http://www.svt.se/%s"%video_player.attrMap['data-json-href']).read())
+    else:    
+        flashvars = json.loads(urllib2.urlopen("http://www.svtplay.se/%s"%video_player.attrMap['data-json-href']+"?output=json").read())
+    video['duration'] = video_player.attrMap.get('data-length',0)
     video['title'] = title
     if not title:
         video['title'] = soup.find('meta',{'property':'og:title'}).attrMap['content'].replace('|','_').replace('/','_')
@@ -177,7 +181,7 @@ if __name__ == "__main__":
                 continue
             print("Downloading...")
             ret = main(video['url'], video['title'])
-
+            print ret
             print Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0]
             try:
                 os.unlink(video['title']+'.ts')
