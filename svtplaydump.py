@@ -41,7 +41,7 @@ except ImportError:
     pass
 import sys, os
 
-def main(url, title):
+def scrape_player_page(url, title):
     """
     Try to scrape the site for video and download. 
     """
@@ -146,17 +146,29 @@ def parse_segment_playlist(playlist):
              metadata["EXT-X-KEY"] = dict([part.split('=',1) for part in parts if '=' in part]) #throw away the commas and make dict of the pairs
     return(segments, metadata)   
 def parse_videolist():
-    page = urllib2.urlopen("http://www.svtplay.se/ajax/videos?antal=100").read()
+    page_num = 1
+    page = urllib2.urlopen("http://www.svtplay.se/ajax/videospager").read() #this call does not work for getting the pages, we use it for the page totals only
     soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
-    videos = []
-    for article in soup.findAll('article'):
-        meta = dict(article.attrs)
-        video = {}
-        video['title'] = meta['data-title']
-        video['description'] = meta['data-description']
-        video['url'] = dict(article.find('a').attrs)['href']
-        videos.append(video)
-    return videos
+    page_tot = int(soup.find('a',{'data-currentpage':True}).attrMap['data-lastpage'])
+    videos_per_page = 8
+    video_num = 0
+    while(page_num <= page_tot):
+        base_url = "http://www.svtplay.se/ajax/videos?sida={}".format(page_num)
+        page = urllib2.urlopen(base_url).read()
+        soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
+        for article in soup.findAll('article'):
+            meta = dict(article.attrs)
+            video = {}
+            video['title'] = meta['data-title']
+            video['description'] = meta['data-description']
+            video['url'] = dict(article.find('a').attrs)['href']
+            video['thumb-url'] = dict(article.find('img',{}).attrs)['src']
+            video['num'] = video_num
+            video['total'] = page_tot * videos_per_page
+            video_num += 1
+            yield video
+        page_num += 1
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -164,23 +176,29 @@ if __name__ == "__main__":
     group.add_argument("-r", "--rss", help="Download all files in rss")
     group.add_argument("-u", "--url", help="Download video in url")
     group.add_argument("-m", "--mirror", help="Mirror all files", action="store_true")
+    parser.add_argument("-n", "--no_act", help="Just print what would be done, don't do any downloading.", action="store_true")
     args = parser.parse_args()
     if args.rss: 
-        d = feedparser.parse(args.url)
+        d = feedparser.parse(args.rss)
         for e in d.entries:
             print("Downloading: %s"%e.title)
-            filename = main(e.link, e.title)
+            if args.no_act:
+                continue
+            filename = scrape_player_page(e.link, e.title)
             print Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0]
         #print(e.description)
     if args.mirror:
         for video in parse_videolist():
             video['title'] = video['title'].replace('/','_')
             print video['title']+'.mkv',
+            print u"{} of {}".format(video['num'], video['total'])
             if os.path.exists(video['title']+'.mkv'):
                 print "Skipping" 
                 continue
             print("Downloading...")
-            ret = main(video['url'], video['title'])
+            if args.no_act:
+                continue
+            ret = scrape_player_page(video['url'], video['title'])
             print ret
             print Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0]
             try:
@@ -188,5 +206,6 @@ if __name__ == "__main__":
             except:
                 import pdb;pdb.set_trace()
     else:
-        video = main(args.url, None)
-        print("Downloaded {}".format(video['title']))   
+        if not args.no_act:
+            video = scrape_player_page(args.url, None)
+        print(u"Downloaded {}".format(args.url))   
