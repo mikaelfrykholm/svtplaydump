@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 #   (C) Copyright 2010 Mikael Frykholm <mikael@frykholm.com>
@@ -22,23 +22,13 @@
 # 0.2 added python 2.4 urlparse compatibility
 # 0.1 initial release
 
-from BeautifulSoup import BeautifulSoup
+from bs4 import BeautifulSoup
 from subprocess import *
 import re
-import json
 from Crypto.Cipher import AES
 import struct
 import argparse
-import feedparser 
-try:
-    import urlparse
-except ImportError:
-    pass
-import urllib2
-try:
-    import urllib2.urlparse as urlparse
-except ImportError:
-    pass
+import requests
 import sys, os
 
 def scrape_player_page(url, title):
@@ -48,25 +38,24 @@ def scrape_player_page(url, title):
     if not url.startswith('http'):
         url = "http://www.svtplay.se" + url
     video = {}
-    page = urllib2.urlopen(url).read()
-    soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
+    soup = BeautifulSoup(requests.get(url).text)
     video_player = soup.body('a',{'data-json-href':True})[0]
-    if video_player.attrMap['data-json-href'].startswith("/wd"):
-        flashvars = json.loads(urllib2.urlopen("http://www.svt.se/%s"%video_player.attrMap['data-json-href']).read())
+    if video_player.attrs['data-json-href'].startswith("/wd"):
+        flashvars = requests.get("http://www.svt.se/%s"%video_player.attrs['data-json-href']).json()
     else:    
-        flashvars = json.loads(urllib2.urlopen("http://www.svtplay.se/%s"%video_player.attrMap['data-json-href']+"?output=json").read())
-    video['duration'] = video_player.attrMap.get('data-length',0)
+        flashvars = requests.get("http://www.svtplay.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
+    video['duration'] = video_player.attrs.get('data-length',0)
     video['title'] = title
     if not title:
-        video['title'] = soup.find('meta',{'property':'og:title'}).attrMap['content'].replace('|','_').replace('/','_')
+        video['title'] = soup.find('meta',{'property':'og:title'}).attrs['content'].replace('|','_').replace('/','_')
     if 'dynamicStreams' in flashvars:
         video['url'] = flashvars['dynamicStreams'][0].split('url:')[1].split('.mp4,')[0] +'.mp4'
         filename = video['title']+".mp4"
-        print Popen(["rtmpdump",u"-o"+filename,"-r", url], stdout=PIPE).communicate()[0]
+        print(Popen(["rtmpdump","-o"+filename,"-r", url], stdout=PIPE).communicate()[0])
     if 'pathflv' in flashvars:
         rtmp = flashvars['pathflv'][0]
         filename = video['title']+".flv"
-        print Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0]
+        print(Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0])
     if 'video' in flashvars:
         for reference in flashvars['video']['videoReferences']:
             if reference['url'].endswith("m3u8"):
@@ -76,44 +65,44 @@ def scrape_player_page(url, title):
                     video['category'] = flashvars['statistics']['category']
         download_from_playlist(video)
     else:
-        print "Could not find any streams"
+        print("Could not find any streams")
         return
     return video
 
 def download_from_playlist(video):
-    playlist = parse_playlist(urllib2.urlopen(video['url']).read())
+    playlist = parse_playlist(requests.get(video['url']).text)
+    if not playlist:
+        return
     videourl = sorted(playlist, key=lambda k: int(k['BANDWIDTH']))[-1]['url']
-    segments, metadata = parse_segment_playlist(urllib2.urlopen(videourl).read())
+    segments, metadata = parse_segment_playlist(requests.get(videourl).text)
     if "EXT-X-KEY" in metadata:
-        key = urllib2.urlopen(metadata["EXT-X-KEY"]['URI'].strip('"')).read()
+        key = requests.get(metadata["EXT-X-KEY"]['URI'].strip('"')).text
         decrypt=True
     else:
         decrypt=False
-    with open("%s"%video['filename'],"w") as ofile:
+    with open("%s"%video['filename'],"wb") as ofile:
         segment=0
         size = 0
         for url in segments:
-            ufile = urllib2.urlopen(url)
-            print "\r{} MB".format(size/1024/1024),
+            ufile = requests.get(url, stream=True).raw
+            print("\r{} MB".format(size/1024/1024))
             sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
                 decryptor = AES.new(key, AES.MODE_CBC, iv)
             while(True):
-                buf = ufile.read(1024)
-                if buf:
-                    if decrypt:
-                        buf = decryptor.decrypt(buf)
-                    ofile.write(buf)
-                    size += len(buf)
-                else:
-                    ufile.close()
+                buf = ufile.read(4096)
+                if not buf:
                     break
+                if decrypt:
+                    buf = decryptor.decrypt(buf)
+                ofile.write(buf)
+                size += len(buf)
             segment += 1
 
 def parse_playlist(playlist):
     if not playlist.startswith("#EXTM3U"):
-        print playlist
+        print(playlist)
         return False
     playlist = playlist.splitlines()[1:]
     items=[]
@@ -144,18 +133,17 @@ def parse_segment_playlist(playlist):
              row = row.split(':',1)[1] #skip first part
              parts = PATTERN.split(row)[1:-1] #do magic re split and keep quotes
              metadata["EXT-X-KEY"] = dict([part.split('=',1) for part in parts if '=' in part]) #throw away the commas and make dict of the pairs
-    return(segments, metadata)   
+    return(segments, metadata)
+
 def parse_videolist():
     page_num = 1
-    page = urllib2.urlopen("http://www.svtplay.se/ajax/videospager").read() #this call does not work for getting the pages, we use it for the page totals only
-    soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
-    page_tot = int(soup.find('a',{'data-currentpage':True}).attrMap['data-lastpage'])
+    soup = BeautifulSoup(requests.get("http://www.svtplay.se/ajax/videospager").text)#this call does not work for getting the pages, we use it for the page totals only
+    page_tot = int(soup.find('a',{'data-currentpage':True}).attrs['data-lastpage'])
     videos_per_page = 8
     video_num = 0
     while(page_num <= page_tot):
         base_url = "http://www.svtplay.se/ajax/videos?sida={}".format(page_num)
-        page = urllib2.urlopen(base_url).read()
-        soup = BeautifulSoup(page,convertEntities=BeautifulSoup.HTML_ENTITIES)
+        soup = BeautifulSoup(requests.get(base_url).text)
         for article in soup.findAll('article'):
             meta = dict(article.attrs)
             video = {}
@@ -179,28 +167,29 @@ if __name__ == "__main__":
     parser.add_argument("-n", "--no_act", help="Just print what would be done, don't do any downloading.", action="store_true")
     args = parser.parse_args()
     if args.rss: 
+        import feedparser
         d = feedparser.parse(args.rss)
         for e in d.entries:
-            print("Downloading: %s"%e.title)
+            print(("Downloading: %s"%e.title))
             if args.no_act:
                 continue
             filename = scrape_player_page(e.link, e.title)
-            print Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0]
+            print(Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0])
         #print(e.description)
     if args.mirror:
         for video in parse_videolist():
             video['title'] = video['title'].replace('/','_')
-            print video['title']+'.mkv',
-            print u"{} of {}".format(video['num'], video['total'])
+            print(video['title']+'.mkv')
+            print("{} of {}".format(video['num'], video['total']))
             if os.path.exists(video['title']+'.mkv'):
-                print "Skipping" 
+                print("Skipping") 
                 continue
             print("Downloading...")
             if args.no_act:
                 continue
             ret = scrape_player_page(video['url'], video['title'])
-            print ret
-            print Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0]
+            print(ret)
+            print(Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0])
             try:
                 os.unlink(video['title']+'.ts')
             except:
@@ -208,4 +197,4 @@ if __name__ == "__main__":
     else:
         if not args.no_act:
             video = scrape_player_page(args.url, None)
-        print(u"Downloaded {}".format(args.url))   
+        print(("Downloaded {}".format(args.url)))   
