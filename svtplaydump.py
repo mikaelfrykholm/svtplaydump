@@ -40,10 +40,13 @@ def scrape_player_page(url, title):
     video = {}
     soup = BeautifulSoup(requests.get(url).text)
     video_player = soup.body('a',{'data-json-href':True})[0]
-    if video_player.attrs['data-json-href'].startswith("/wd"):
-        flashvars = requests.get("http://www.svt.se/%s"%video_player.attrs['data-json-href']).json()
+    if 'oppetarkiv.se' in url:
+        flashvars = requests.get("http://www.oppetarkiv.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
     else:    
-        flashvars = requests.get("http://www.svtplay.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
+        if video_player.attrs['data-json-href'].startswith("/wd"):
+            flashvars = requests.get("http://www.svt.se/%s"%video_player.attrs['data-json-href']).json()
+        else:    
+            flashvars = requests.get("http://www.svtplay.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
     video['duration'] = video_player.attrs.get('data-length',0)
     video['title'] = title
     if not title:
