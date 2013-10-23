@@ -61,15 +61,15 @@ def scrape_player_page(url, title):
         print(Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0])
     if 'video' in flashvars:
         for reference in flashvars['video']['videoReferences']:
-            if reference['url'].endswith("m3u8"):
+            if 'm3u8' in reference['url']:
                 video['url']=reference['url']
                 video['filename'] = video['title']+'.ts'
                 if 'statistics' in flashvars:
                     video['category'] = flashvars['statistics']['category']
         download_from_playlist(video)
-    else:
+    if not 'url' in video:
         print("Could not find any streams")
-        return
+        return False
     return video
 
 def download_from_playlist(video):
@@ -77,7 +77,9 @@ def download_from_playlist(video):
     if not playlist:
         return
     videourl = sorted(playlist, key=lambda k: int(k['BANDWIDTH']))[-1]['url']
-    segments, metadata = parse_segment_playlist(requests.get(videourl).text)
+    if not videourl.startswith('http'): #if relative path
+        videourl = "{}/{}".format(os.path.dirname(video['url']), videourl) 
+    segments, metadata = parse_segment_playlist(videourl)
     if "EXT-X-KEY" in metadata:
         key = requests.get(metadata["EXT-X-KEY"]['URI'].strip('"')).text
         decrypt=True
@@ -107,11 +109,14 @@ def parse_playlist(playlist):
     if not playlist.startswith("#EXTM3U"):
         print(playlist)
         return False
-    playlist = playlist.splitlines()[1:]
+    playlist = playlist.splitlines()
+    while not 'EXT-X-STREAM-INF' in playlist[0]:
+        playlist = playlist[1:]
     items=[]
     for (metadata_string,url) in zip(playlist[0::2], playlist[1::2]):
         md = dict()
-        assert 'EXT-X-STREAM-INF' in metadata_string.split(':')[0]
+        if not 'EXT-X-STREAM-INF' in metadata_string.split(':')[0]:
+            continue
         for item in metadata_string.split(':')[1].split(','):
             if '=' in item:
                 md.update([item.split('='),]) 
@@ -119,7 +124,8 @@ def parse_playlist(playlist):
         items.append(md)
     return items 
 
-def parse_segment_playlist(playlist):
+def parse_segment_playlist(playlisturl):
+    playlist = requests.get(playlisturl).text
     assert playlist.startswith("#EXTM3U")
     PATTERN = re.compile(r'''((?:[^,"']|"[^"]*"|'[^']*')+)''')
     segments = []
@@ -127,6 +133,8 @@ def parse_segment_playlist(playlist):
     metadata = {}
     for row in playlist.splitlines():
         if next_is_url:
+            if not row.startswith('http'): #if relative path
+                row = "{}/{}".format(os.path.dirname(playlisturl), row) 
             segments.append(row)
             next_is_url=False
             continue
@@ -160,6 +168,13 @@ def parse_videolist():
             yield video
         page_num += 1
 
+def remux(video):
+    basename = video['filename'].split('.ts')[0]
+    print(Popen(["avconv","-i",video['filename'],"-vcodec","copy","-acodec","copy", basename+'.mkv'], stdout=PIPE).communicate()[0])
+    try:
+        os.unlink(video['filename'])
+    except:
+        pass
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -168,6 +183,8 @@ if __name__ == "__main__":
     group.add_argument("-u", "--url", help="Download video in url")
     group.add_argument("-m", "--mirror", help="Mirror all files", action="store_true")
     parser.add_argument("-n", "--no_act", help="Just print what would be done, don't do any downloading.", action="store_true")
+    parser.add_argument("--no_remux", help="Don't remux into mkv", action="store_true")
+    
     args = parser.parse_args()
     if args.rss: 
         import feedparser
@@ -177,7 +194,9 @@ if __name__ == "__main__":
             if args.no_act:
                 continue
             filename = scrape_player_page(e.link, e.title)
-            print(Popen(["avconv","-i",filename,"-vcodec","copy","-acodec","copy", filename+'.mkv'], stdout=PIPE).communicate()[0])
+            if args.no_remux:
+                continue
+            self.remux({'title':e.title})
         #print(e.description)
     if args.mirror:
         for video in parse_videolist():
@@ -190,14 +209,13 @@ if __name__ == "__main__":
             print("Downloading...")
             if args.no_act:
                 continue
-            ret = scrape_player_page(video['url'], video['title'])
-            print(ret)
-            print(Popen(["avconv","-i",video['title']+'.ts',"-vcodec","copy","-acodec","copy", video['title']+'.mkv'], stdout=PIPE).communicate()[0])
-            try:
-                os.unlink(video['title']+'.ts')
-            except:
-                import pdb;pdb.set_trace()
+            video = scrape_player_page(video['url'], video['title'])
+            if args.no_remux:
+                continue
+            remux(video)
     else:
         if not args.no_act:
             video = scrape_player_page(args.url, None)
+        if not args.no_remux:
+            remux({'title':e.title})
         print(("Downloaded {}".format(args.url)))   
