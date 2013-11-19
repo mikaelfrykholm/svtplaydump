@@ -9,7 +9,7 @@ setup(
     author_email = "mikael@frykholm.com",
     url = "https://github.com/mikaelfrykholm/svtplaydump",
     keywords = ["svtplay"],
-    install_requires=['beautifulsoup4', 'feedparser', 'requests>=1.2.1', 'pycrypto>=2.6.1','html5lib'],
+    install_requires=['beautifulsoup4', 'feedparser', 'requests>=1.2.1', 'pycrypto>=2.6.1','html5lib', 'lxml'],
     classifiers = [
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",

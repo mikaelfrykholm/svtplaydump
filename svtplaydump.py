@@ -22,7 +22,7 @@
 # 0.2 added python 2.4 urlparse compatibility
 # 0.1 initial release
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Doctype
 from subprocess import *
 import re
 from Crypto.Cipher import AES
@@ -31,16 +31,28 @@ import argparse
 import requests
 import sys, os
 
-def scrape_player_page(url, title):
+class Video(dict):
+    def __init__(self, *args, **kwargs):
+        self.update(dict(*args, **kwargs))  # use the free update to set keys
+
+    def __setattr__(self, name, value):
+        return self.__setitem__(name,value)
+        
+    def __getattr__(self, name):
+        return self.__getitem__(name)
+        
+    def is_downloaded(self):
+        raise("NotImplemented")
+
+def scrape_player_page(video):
     """
     Try to scrape the site for video and download. 
     """
-    if not url.startswith('http'):
-        url = "http://www.svtplay.se" + url
-    video = {}
-    soup = BeautifulSoup(requests.get(url).text)
+    if not video['url'].startswith('http'):
+        video['url'] = "http://www.svtplay.se" + video['url']
+    soup = BeautifulSoup(requests.get(video['url']).text)
     video_player = soup.body('a',{'data-json-href':True})[0]
-    if 'oppetarkiv.se' in url:
+    if 'oppetarkiv.se' in video['url']:
         flashvars = requests.get("http://www.oppetarkiv.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
     else:    
         if video_player.attrs['data-json-href'].startswith("/wd"):
@@ -48,9 +60,13 @@ def scrape_player_page(url, title):
         else:    
             flashvars = requests.get("http://www.svtplay.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
     video['duration'] = video_player.attrs.get('data-length',0)
-    video['title'] = title
-    if not title:
+    if not video['title']:
         video['title'] = soup.find('meta',{'property':'og:title'}).attrs['content'].replace('|','_').replace('/','_')
+    if not 'genre' in video:
+        if soup.find(text='Kategori:'):
+            video['genre'] = soup.find(text='Kategori:').parent.parent.a.text
+        else:
+            video['genre'] = 'Ingen Genre' 
     if 'dynamicStreams' in flashvars:
         video['url'] = flashvars['dynamicStreams'][0].split('url:')[1].split('.mp4,')[0] +'.mp4'
         filename = video['title']+".mp4"
@@ -90,7 +106,7 @@ def download_from_playlist(video):
         size = 0
         for url in segments:
             ufile = requests.get(url, stream=True).raw
-            print("\r{} MB".format(size/1024/1024))
+            print("\r{0:.2f} MB".format(size/1024/1024))
             sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
@@ -105,6 +121,9 @@ def download_from_playlist(video):
                 size += len(buf)
             segment += 1
 
+    if 'thumb-url' in video:
+        video['thumb'] = requests.get(video['thumb-url'],stream=True).raw
+
 def parse_playlist(playlist):
     if not playlist.startswith("#EXTM3U"):
         print(playlist)
@@ -114,7 +133,7 @@ def parse_playlist(playlist):
         playlist = playlist[1:]
     items=[]
     for (metadata_string,url) in zip(playlist[0::2], playlist[1::2]):
-        md = dict()
+        md = Video()
         if not 'EXT-X-STREAM-INF' in metadata_string.split(':')[0]:
             continue
         for item in metadata_string.split(':')[1].split(','):
@@ -157,7 +176,7 @@ def parse_videolist():
         soup = BeautifulSoup(requests.get(base_url).text)
         for article in soup.findAll('article'):
             meta = dict(article.attrs)
-            video = {}
+            video = Video()
             video['title'] = meta['data-title']
             video['description'] = meta['data-description']
             video['url'] = dict(article.find('a').attrs)['href']
@@ -168,13 +187,57 @@ def parse_videolist():
             yield video
         page_num += 1
 
-def remux(video):
+def remux(video, xml=None):
     basename = video['filename'].split('.ts')[0]
-    print(Popen(["avconv","-i",video['filename'],"-vcodec","copy","-acodec","copy", basename+'.mkv'], stdout=PIPE).communicate()[0])
-    try:
-        os.unlink(video['filename'])
-    except:
-        pass
+    if 'genre' in video:
+        if not os.path.exists(video['genre']):
+            os.mkdir(video['genre'])
+    video['path'] = os.path.join(video['genre'],basename+'.mkv')
+    command = ["mkvmerge","-o",video['path'], '--title',video['title']]
+
+    if xml:
+        with open(basename+'.xml','w') as f:
+            f.write(xml)
+            command.extend(['--global-tags',basename+'.xml'])           
+    if 'thumb' in video:
+        with open('thumbnail.jpg','wb') as f: #FIXME use title instead for many downloaders
+            f.write(video['thumb'].read())
+            command.extend(['--attachment-description', "Thumbnail",
+                 '--attachment-mime-type', 'image/jpeg',
+                 '--attach-file', 'thumbnail.jpg'])
+    command.append(video['filename'])
+    print(Popen(command, stdout=PIPE).communicate()[0])
+    for fname in (video['filename'], basename+'.xml','thumbnail.jpg'):
+        try:
+            os.unlink(fname)
+        except:
+            pass
+    
+def mkv_metadata(video):
+    root = BeautifulSoup(features='xml')
+    root.append(Doctype('Tags SYSTEM "matroskatags.dtd"'))
+    tags = root.new_tag("Tags")
+    tag = root.new_tag("Tag")
+    tags.append(tag)
+    root.append(tags)
+    keep = ('title','description', 'url','genre')
+    targets = root.new_tag("Targets")
+    ttv = root.new_tag("TargetTypeValue")
+    ttv.string = str(50)
+    targets.append(ttv)
+    tag.append(targets)
+    for key in video:
+        if not key in keep:
+            continue
+        simple = root.new_tag('Simple')
+        name = root.new_tag('Name')
+        name.string=key.upper()
+        simple.append(name)
+        sstring = root.new_tag('String')
+        sstring.string=video[key]
+        simple.append(sstring)
+        tag.append(simple)
+    return str(root)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -193,29 +256,35 @@ if __name__ == "__main__":
             print(("Downloading: %s"%e.title))
             if args.no_act:
                 continue
-            filename = scrape_player_page(e.link, e.title)
+            video = scrape_player_page({'title':e.title,'url':e.link})
             if args.no_remux:
                 continue
-            self.remux({'title':e.title})
+            self.remux(video)
         #print(e.description)
     if args.mirror:
+        if not os.path.exists('.seen'):
+            os.mkdir('.seen')
         for video in parse_videolist():
             video['title'] = video['title'].replace('/','_')
             print(video['title']+'.mkv')
             print("{} of {}".format(video['num'], video['total']))
-            if os.path.exists(video['title']+'.mkv'):
+            
+            if os.path.exists(os.path.join('.seen',video['title'])):
                 print("Skipping") 
                 continue
             print("Downloading...")
             if args.no_act:
                 continue
-            video = scrape_player_page(video['url'], video['title'])
+            open(os.path.join('.seen',video['title']),'w').close() #touch
+            video = scrape_player_page(video)
             if args.no_remux:
                 continue
-            remux(video)
+            xml = mkv_metadata(video)
+            remux(video, xml)
+            
     else:
         if not args.no_act:
-            video = scrape_player_page(args.url, None)
+            video = scrape_player_page({'url':args.url})
         if not args.no_remux:
             remux({'title':e.title})
         print(("Downloaded {}".format(args.url)))   
