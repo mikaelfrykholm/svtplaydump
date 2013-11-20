@@ -31,7 +31,8 @@ import argparse
 import requests
 import sys, os
 import socket
-
+import feedparser
+from datetime import datetime, timezone
 class Video(dict):
     def __init__(self, *args, **kwargs):
         self.update(dict(*args, **kwargs))  # use the free update to set keys
@@ -76,6 +77,11 @@ def scrape_player_page(video):
         rtmp = flashvars['pathflv'][0]
         filename = video['title']+".flv"
         print(Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0])
+    if not 'timestamp' in video:
+        if soup.find_all(datetime=True):
+            xmldate_str = soup.find_all(datetime=True)[0].attrs['datetime']
+            video['timestamp'] = datetime(*feedparser._parse_date_w3dtf(xmldate_str)[:6]) #naive in utc
+            video['timestamp'] = video['timestamp'].replace(tzinfo=timezone.utc).astimezone(tz=None) #convert to local time
     if 'video' in flashvars:
         for reference in flashvars['video']['videoReferences']:
             if 'm3u8' in reference['url']:
@@ -115,7 +121,7 @@ def download_from_playlist(video):
             while(True):
                 try:
                     buf = ufile.read(4096)
-                except socket.error as e:
+                except (socket.error, TypeError) as e:
                     print("Error reading, skipping file")
                     print(e)
                     return
@@ -200,7 +206,7 @@ def remux(video, xml=None):
             os.mkdir(video['genre'])
         video['path'] = os.path.join(video['genre'],basename+'.mkv')
     else:
-        video['path'] = basename+'.mkv'
+        video['path'] = basename+'.mkv' 
     command = ["mkvmerge","-o",video['path'], '--title',video['title']]
 
     if xml:
@@ -220,6 +226,9 @@ def remux(video, xml=None):
             os.unlink(fname)
         except:
             pass
+    if 'timestamp' in video:
+        os.utime(video['path'], times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
+
     
 def mkv_metadata(video):
     root = BeautifulSoup(features='xml')
@@ -258,7 +267,6 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
     if args.rss: 
-        import feedparser
         d = feedparser.parse(args.rss)
         for e in d.entries:
             print(("Downloading: %s"%e.title))
