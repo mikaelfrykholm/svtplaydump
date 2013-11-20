@@ -89,7 +89,8 @@ def scrape_player_page(video):
                 video['filename'] = video['title']+'.ts'
                 if 'statistics' in flashvars:
                     video['category'] = flashvars['statistics']['category']
-        download_from_playlist(video)
+        if not download_from_playlist(video):
+            return False
     if not 'url' in video:
         print("Could not find any streams")
         return False
@@ -112,7 +113,12 @@ def download_from_playlist(video):
         segment=0
         size = 0
         for url in segments:
-            ufile = requests.get(url, stream=True).raw
+            try:
+                ufile = requests.get(url, stream=True).raw
+            except:
+                print("Error reading, skipping file") #FIXME mark file as failed
+                print(sys.exc_info()[1])
+                return False
             print("\r{0:.2f} MB".format(size/1024/1024),end="")
             sys.stdout.flush()
             if decrypt:
@@ -121,10 +127,10 @@ def download_from_playlist(video):
             while(True):
                 try:
                     buf = ufile.read(4096)
-                except (socket.error, TypeError) as e:
-                    print("Error reading, skipping file")
-                    print(e)
-                    return
+                except:
+                    print("Error reading, skipping file") #FIXME mark file as failed
+                    print(sys.exc_info()[1])
+                    return False
                 if not buf:
                     break
                 if decrypt:
@@ -135,6 +141,7 @@ def download_from_playlist(video):
 
     if 'thumb-url' in video:
         video['thumb'] = requests.get(video['thumb-url'],stream=True).raw
+    return True
 
 def parse_playlist(playlist):
     if not playlist.startswith("#EXTM3U"):
@@ -231,7 +238,7 @@ def remux(video, xml=None):
             os.utime(video['path'], times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
         except FileNotFoundError as e:
             print(e)
-            
+
     
 def mkv_metadata(video):
     root = BeautifulSoup(features='xml')
@@ -295,7 +302,13 @@ if __name__ == "__main__":
             if args.no_act:
                 continue
             open(os.path.join('.seen',video['title']),'w').close() #touch
-            video = scrape_player_page(video)
+            ret = scrape_player_page(video)
+            if not ret:
+                if not os.path.exists('.failed'):
+                    os.mkdir('.failed')
+                open(os.path.join('.failed',video['title']),'w').close() #touch
+                continue
+            video = ret
             if args.no_remux:
                 continue
             xml = mkv_metadata(video)
