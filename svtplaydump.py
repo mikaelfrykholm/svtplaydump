@@ -198,7 +198,9 @@ def remux(video, xml=None):
     if 'genre' in video:
         if not os.path.exists(video['genre']):
             os.mkdir(video['genre'])
-    video['path'] = os.path.join(video['genre'],basename+'.mkv')
+        video['path'] = os.path.join(video['genre'],basename+'.mkv')
+    else:
+        video['path'] = basename+'.mkv'
     command = ["mkvmerge","-o",video['path'], '--title',video['title']]
 
     if xml:
