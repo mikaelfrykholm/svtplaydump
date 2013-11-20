@@ -30,6 +30,7 @@ import struct
 import argparse
 import requests
 import sys, os
+import socket
 
 class Video(dict):
     def __init__(self, *args, **kwargs):
@@ -106,13 +107,18 @@ def download_from_playlist(video):
         size = 0
         for url in segments:
             ufile = requests.get(url, stream=True).raw
-            print("\r{0:.2f} MB".format(size/1024/1024))
+            print("\r{0:.2f} MB".format(size/1024/1024),end="")
             sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
                 decryptor = AES.new(key, AES.MODE_CBC, iv)
             while(True):
-                buf = ufile.read(4096)
+                try:
+                    buf = ufile.read(4096)
+                except socket.error as e:
+                    print("Error reading, skipping file")
+                    print(e)
+                    return
                 if not buf:
                     break
                 if decrypt:
