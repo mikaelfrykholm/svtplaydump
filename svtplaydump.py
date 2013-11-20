@@ -227,8 +227,11 @@ def remux(video, xml=None):
         except:
             pass
     if 'timestamp' in video:
-        os.utime(video['path'], times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
-
+        try:
+            os.utime(video['path'], times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
+        except FileNotFoundError as e:
+            print(e)
+            
     
 def mkv_metadata(video):
     root = BeautifulSoup(features='xml')
