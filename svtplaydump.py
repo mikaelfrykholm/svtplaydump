@@ -62,7 +62,7 @@ def scrape_player_page(video):
         else:    
             flashvars = requests.get("http://www.svtplay.se/%s"%video_player.attrs['data-json-href']+"?output=json").json()
     video['duration'] = video_player.attrs.get('data-length',0)
-    if not video['title']:
+    if not 'title' in video:
         video['title'] = soup.find('meta',{'property':'og:title'}).attrs['content'].replace('|','_').replace('/','_')
     if not 'genre' in video:
         if soup.find(text='Kategori:'):
@@ -97,7 +97,34 @@ def scrape_player_page(video):
     return video
 
 def download_from_playlist(video):
-    playlist = parse_playlist(requests.get(video['url']).text)
+    params = requests.utils.urlparse(video['url']).query
+    print(params)
+    if 'cc1=' in params:  #'cc1=name=Svenska~default=yes~forced=no~uri=http://media.svt.se/download/mcc/wp3/undertexter-wsrt/1134047/1134047-025A/C(sv)/index.m3u8~lang=sv'
+        video['subs'] = [dict([k.split('=') for k in params.split('cc1=')[1].split('~')])] #make a dict from the paramstring
+    try:
+        req = requests.get(video['url']).text
+    except:
+        print("Error reading, skipping file") 
+        print(sys.exc_info()[1])
+        return False
+    if 'subs' in video:
+        try:
+            segments = [item for item in requests.get(video['subs'][0]['uri']).text.split('\n') if 'vtt' in item]
+        except:
+            print("Error reading, skipping subtitle") 
+            print(sys.exc_info()[1])
+            segments = [] #ugly FIXME
+        video['subs'][0]['download'] = []
+        for segment in segments:
+            if not segment.startswith('http'):
+                segment = "{}/{}".format(os.path.dirname(video['subs'][0]['uri']), segment)
+            try:
+                video['subs'][0]['download'].append(requests.get(segment).text)
+            except:
+                print("Error reading, skipping subtitle") 
+                print(sys.exc_info()[1])
+                break
+    playlist = parse_playlist(req)
     if not playlist:
         return
     videourl = sorted(playlist, key=lambda k: int(k['BANDWIDTH']))[-1]['url']
@@ -105,7 +132,12 @@ def download_from_playlist(video):
         videourl = "{}/{}".format(os.path.dirname(video['url']), videourl) 
     segments, metadata = parse_segment_playlist(videourl)
     if "EXT-X-KEY" in metadata:
-        key = requests.get(metadata["EXT-X-KEY"]['URI'].strip('"')).text
+        try:
+            key = requests.get(metadata["EXT-X-KEY"]['URI'].strip('"')).text
+        except:
+            print("Error reading, skipping file") 
+            print(sys.exc_info()[1])
+            return False
         decrypt=True
     else:
         decrypt=False
@@ -116,14 +148,19 @@ def download_from_playlist(video):
             try:
                 ufile = requests.get(url, stream=True).raw
             except:
-                print("Error reading, skipping file") #FIXME mark file as failed
+                print("Error reading, skipping file") 
                 print(sys.exc_info()[1])
                 return False
             print("\r{0:.2f} MB".format(size/1024/1024),end="")
             sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
-                decryptor = AES.new(key, AES.MODE_CBC, iv)
+                try:
+                    decryptor = AES.new(key, AES.MODE_CBC, iv) #ValueError: AES key must be either 16, 24, or 32 bytes long
+                except(ValueError) as e:
+                    print("Error using decryption key. Skipping")
+                    print(e)
+                    return False             
             while(True):
                 try:
                     buf = ufile.read(4096)
@@ -140,7 +177,12 @@ def download_from_playlist(video):
             segment += 1
 
     if 'thumb-url' in video:
-        video['thumb'] = requests.get(video['thumb-url'],stream=True).raw
+        try:
+            video['thumb'] = requests.get(video['thumb-url'],stream=True).raw
+        except:
+            print("Error reading thumbnail") #FIXME mark file as failed
+            print(sys.exc_info()[1])
+
     return True
 
 def parse_playlist(playlist):
@@ -226,6 +268,14 @@ def remux(video, xml=None):
             command.extend(['--attachment-description', "Thumbnail",
                  '--attachment-mime-type', 'image/jpeg',
                  '--attach-file', 'thumbnail.jpg'])
+    # if 'subs' in video:
+    #     for sub in video['subs']:
+    #         if 'download' in sub:
+    #             with open("{}.vtt".format(sub['lang']),'wb') as f:
+    #                 f.write(bytes("".join(sub['download']),'utf-8')) #FIXME
+    #                 command.extend(['--language 0:{} {}.vtt'.format(sub['lang'],sub['lang'])])
+                 
+        
     command.append(video['filename'])
     print(Popen(command, stdout=PIPE).communicate()[0])
     for fname in (video['filename'], basename+'.xml','thumbnail.jpg'):
@@ -318,5 +368,5 @@ if __name__ == "__main__":
         if not args.no_act:
             video = scrape_player_page({'url':args.url})
         if not args.no_remux:
-            remux({'title':e.title})
+            remux(video)
         print(("Downloaded {}".format(args.url)))   
