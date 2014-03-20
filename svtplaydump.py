@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.4
 # -*- coding: utf-8 -*-
 #
 #   (C) Copyright 2010 Mikael Frykholm <mikael@frykholm.com>
@@ -33,6 +33,8 @@ import sys, os
 import socket
 import feedparser
 from datetime import datetime, timezone
+from pathlib import Path
+
 class Video(dict):
     def __init__(self, *args, **kwargs):
         self.update(dict(*args, **kwargs))  # use the free update to set keys
@@ -71,22 +73,23 @@ def scrape_player_page(video):
             video['genre'] = 'Ingen Genre' 
     if 'dynamicStreams' in flashvars:
         video['url'] = flashvars['dynamicStreams'][0].split('url:')[1].split('.mp4,')[0] +'.mp4'
-        filename = video['title']+".mp4"
+        filename = Path(video['title']).with_suffix(".mp4")
         print(Popen(["rtmpdump","-o"+filename,"-r", url], stdout=PIPE).communicate()[0])
     if 'pathflv' in flashvars:
         rtmp = flashvars['pathflv'][0]
-        filename = video['title']+".flv"
+        filename = Path(video['title']).with_suffix(".flv")
         print(Popen(["mplayer","-dumpstream","-dumpfile",filename, rtmp], stdout=PIPE).communicate()[0])
     if not 'timestamp' in video:
         if soup.find_all(datetime=True):
             xmldate_str = soup.find_all(datetime=True)[0].attrs['datetime']
-            video['timestamp'] = datetime(*feedparser._parse_date_w3dtf(xmldate_str)[:6]) #naive in utc
-            video['timestamp'] = video['timestamp'].replace(tzinfo=timezone.utc).astimezone(tz=None) #convert to local time
+            if xmldate_str:
+                video['timestamp'] = datetime(*feedparser._parse_date_w3dtf(xmldate_str)[:6]) #naive in utc
+                video['timestamp'] = video['timestamp'].replace(tzinfo=timezone.utc).astimezone(tz=None) #convert to local time
     if 'video' in flashvars:
         for reference in flashvars['video']['videoReferences']:
             if 'm3u8' in reference['url']:
                 video['url']=reference['url']
-                video['filename'] = video['title']+'.ts'
+                video['filename'] = Path(video['title']).with_suffix('.ts')
                 if 'statistics' in flashvars:
                     video['category'] = flashvars['statistics']['category']
         if not download_from_playlist(video):
@@ -141,7 +144,7 @@ def download_from_playlist(video):
         decrypt=True
     else:
         decrypt=False
-    with open("%s"%video['filename'],"wb") as ofile:
+    with video['filename'].open("wb") as ofile:
         segment=0
         size = 0
         for url in segments:
@@ -151,7 +154,7 @@ def download_from_playlist(video):
                 print("Error reading, skipping file") 
                 print(sys.exc_info()[1])
                 return False
-            print("\r{0:.2f} MB".format(size/1024/1024),end="")
+            print("\r{0:.2f} MB".format(size/1024/1024), end="")
             sys.stdout.flush()
             if decrypt:
                 iv=struct.pack("IIII",segment,0,0,0)
@@ -249,19 +252,18 @@ def parse_videolist():
         page_num += 1
 
 def remux(video, xml=None):
-    basename = video['filename'].split('.ts')[0]
     if 'genre' in video:
         if not os.path.exists(video['genre']):
             os.mkdir(video['genre'])
-        video['path'] = os.path.join(video['genre'],basename+'.mkv')
+        video['path'] = Path(video['genre'] / video['filename']).with_suffix('.mkv')
     else:
-        video['path'] = basename+'.mkv' 
-    command = ["mkvmerge","-o",video['path'], '--title',video['title']]
+        video['path'] = video['filename'].with_suffix('.mkv') 
+    command = ["mkvmerge","-o",str(video['path']), '--title',video['title']]
 
     if xml:
-        with open(basename+'.xml','w') as f:
+        with video['filename'].with_suffix('.xml').open('w') as f:
             f.write(xml)
-            command.extend(['--global-tags',basename+'.xml'])           
+            command.extend(['--global-tags',str(video['filename'].with_suffix('.xml'))])           
     if 'thumb' in video:
         with open('thumbnail.jpg','wb') as f: #FIXME use title instead for many downloaders
             f.write(video['thumb'].read())
@@ -274,18 +276,17 @@ def remux(video, xml=None):
     #             with open("{}.vtt".format(sub['lang']),'wb') as f:
     #                 f.write(bytes("".join(sub['download']),'utf-8')) #FIXME
     #                 command.extend(['--language 0:{} {}.vtt'.format(sub['lang'],sub['lang'])])
-                 
-        
-    command.append(video['filename'])
+
+    command.append(str(video['filename']))
     print(Popen(command, stdout=PIPE).communicate()[0])
-    for fname in (video['filename'], basename+'.xml','thumbnail.jpg'):
+    for fname in (video['filename'], video['filename'].with_suffix('.xml'),Path('thumbnail.jpg')):
         try:
-            os.unlink(fname)
+            fname.unlink()
         except:
             pass
     if 'timestamp' in video:
         try:
-            os.utime(video['path'], times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
+            os.utime(str(video['path']), times=(video['timestamp'].timestamp(),video['timestamp'].timestamp()))
         except FileNotFoundError as e:
             print(e)
 
