@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.4
+
 import requests
 import svtplaydump
 import os.path
+from pathlib import Path
+
+
 def get_hls_playlist(url):
     ret = requests.get(url).json()
     #import pdb;pdb.set_trace()
@@ -20,11 +24,10 @@ for vid in res['results']:
     video['title'] = vid['name']
     video['description'] = vid['lead']
     video['url'] = get_hls_playlist("http://premium.tv4play.se/api/web/asset/{}/play.json?protocol=hls&videoFormat=MP4+WVM+SMI".format(vid['href']))
-    video['filename'] = "{} {}.ts".format(vid['ontime'],vid['name'])
+    video['filename'] = Path("{} {}.ts".format(vid['ontime'],vid['name']))
     videos.append(video)
-    basename = video['filename'].split('.ts')[0]
-    if os.path.exists(basename+'.mkv'):
-        print("Skipping {}".format(basename))
+    if video['filename'].with_suffix('.mkv').exists():
+        print("Skipping {}".format(video['filename'].with_suffix('.mkv')))
         continue
     svtplaydump.download_from_playlist(video)
     svtplaydump.remux(video)
