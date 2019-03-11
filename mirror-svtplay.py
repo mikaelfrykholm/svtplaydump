@@ -1,3 +1,4 @@
+#!/usr/bin/python3
 from pathlib import Path
 import requests
 import youtube_dl
@@ -17,7 +18,7 @@ def find_genre(video):
     return "Ingen genre"
 
 def download(video):
-    print(video)
+#    print(video)
     if video['live']:
         return
     genre = find_genre(video)
