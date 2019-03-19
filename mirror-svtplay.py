@@ -73,6 +73,7 @@ def download(video):
                  'allsubtitles': True,
                  'writethumbnail': True, 
                  'outtmpl' : f'{path}/%(title)s-%(id)s.%(ext)s',
+                 'source_address': '0.0.0.0',
                  'postprocessors': [
                   {
                   'key': 'ExecAfterDownload',
